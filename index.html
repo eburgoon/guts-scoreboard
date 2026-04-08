@@ -671,38 +671,73 @@ function launch() {
 }
 
 // ── Fetch ──────────────────────────────────────
+let lastGoodData = null;
+
 async function fetchAndRender() {
   try {
     const separator = csvUrl.includes('?') ? '&' : '?';
     const url = csvUrl + separator + '_t=' + Date.now();
     const res = await fetch(url);
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status} ${res.statusText}${body ? ' — ' + body.slice(0, 120) : ''}`);
+      throw new Error(`HTTP ${res.status}`);
     }
-    const csv = await res.text();
-    render(parseCSV(csv));
-    document.getElementById('errorMsg').textContent = '';
+    const text = await res.text();
+
+    // Guard: if Google returned HTML instead of CSV, skip this cycle
+    if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) {
+      console.warn('Got HTML instead of CSV, skipping');
+      return;
+    }
+
+    const data = parseCSV(text);
+
+    // Guard: if we got no teams, skip — don't wipe the board
+    if (data.length === 0) {
+      console.warn('Parsed 0 teams, skipping');
+      return;
+    }
+
+    lastGoodData = data;
+    render(data);
+
     const t = new Date();
     document.getElementById('lastUpdated').textContent =
       'updated ' + t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    document.getElementById('errorMsg').textContent = `→ Fetch failed: ${message}`;
+    console.warn('Fetch error, keeping last good data:', err);
     document.getElementById('lastUpdated').textContent = 'fetch error — retrying';
+    // Don't re-render — the board keeps showing the last good state
   }
 }
 
 function parseCSV(csv) {
-  // Cols: A=Team#  B=Team Name  C=Total  D+=Sets
-  const rows = csv.trim().split('\n').map(r =>
-    r.split(',').map(c => c.trim().replace(/^"|"$/g, ''))
-  );
+  const rows = [];
+  for (const line of csv.trim().split('\n')) {
+    const row = [];
+    let cur = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === ',' && !inQuotes) {
+        row.push(cur.trim());
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    row.push(cur.trim());
+    rows.push(row);
+  }
+
   const out = [];
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     if (!r[1]) continue;
-    out.push({ name: r[1], total: parseFloat(r[2]) || 0 });
+    const total = parseFloat(r[2]);
+    if (isNaN(total)) continue;  // skip rows without a valid score
+    out.push({ name: r[1], total });
   }
   return out;
 }
