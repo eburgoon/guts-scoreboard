@@ -599,7 +599,8 @@
 // ── State ──────────────────────────────────────
 let csvUrl = '';
 let prevScores = {};
-let bestScores = {}; // highest score seen per team — prevents CDN cache flicker from rolling back scores
+let bestScores = {};      // { name: score } — current displayed score per team
+let pendingDecreases = {}; // { name: { total, count } } — tracks potential corrections waiting for confirmation
 let demoData = [];
 
 // ── Setup ──────────────────────────────────────
@@ -640,7 +641,8 @@ function buildCsvUrl(url) {
     }
 
     // Standard /d/ link — use export endpoint (sheet must be shared as "anyone with link can view")
-    const stdMatch = parsed.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    // Negative lookahead (?!e\/) prevents matching /d/e/... URLs that slipped past pubMatch
+    const stdMatch = parsed.pathname.match(/\/spreadsheets\/d\/(?!e\/)([a-zA-Z0-9-_]+)/);
     if (stdMatch?.[1]) {
       const gid = parsed.searchParams.get('gid') || parsed.hash.match(/gid=(\d+)/)?.[1] || '0';
       return `https://docs.google.com/spreadsheets/d/${stdMatch[1]}/export?format=csv&gid=${gid}`;
@@ -672,9 +674,11 @@ function launch() {
 }
 
 // ── Fetch ──────────────────────────────────────
-let lastCsvText = '';
+let fetching = false;
 
 async function fetchAndRender() {
+  if (fetching) return;
+  fetching = true;
   try {
     const separator = csvUrl.includes('?') ? '&' : '?';
     const url = csvUrl + separator + '_t=' + Date.now();
@@ -683,23 +687,65 @@ async function fetchAndRender() {
     const text = await res.text();
 
     if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return;
-    if (text === lastCsvText) return; // no change
 
     const raw = parseCSV(text);
     if (raw.length === 0) return;
 
-    // Only let scores go up — if CDN serves a stale response, ignore any decreases
-    const data = raw.map(t => ({ name: t.name, total: Math.max(t.total, bestScores[t.name] ?? 0) }));
-    data.forEach(t => { bestScores[t.name] = t.total; });
+    // Build a map of what the sheet currently says
+    const rawMap = Object.fromEntries(raw.map(t => [t.name, t.total]));
 
-    lastCsvText = text;
+    // All known teams = union of what the sheet has now + what we've seen before
+    // This prevents teams from disappearing when a stale CDN response comes through
+    const allNames = new Set([...Object.keys(rawMap), ...Object.keys(bestScores)]);
+
+    let changed = false;
+    const data = [];
+
+    for (const name of allNames) {
+      const current = bestScores[name] ?? 0;
+      const incoming = rawMap[name];
+      let resolved;
+
+      if (incoming === undefined) {
+        // Team absent from this response (stale CDN) — hold current score
+        resolved = current;
+      } else if (incoming >= current) {
+        // Score went up or stayed the same — apply immediately
+        delete pendingDecreases[name];
+        resolved = incoming;
+      } else {
+        // Score went down — could be CDN serving stale data, or a real correction.
+        // Require 3 consecutive fetches showing the lower value before accepting.
+        const pd = pendingDecreases[name];
+        if (pd && pd.total === incoming) {
+          pd.count++;
+          if (pd.count >= 3) {
+            delete pendingDecreases[name];
+            resolved = incoming; // confirmed real correction
+          } else {
+            resolved = current; // still waiting
+          }
+        } else {
+          pendingDecreases[name] = { total: incoming, count: 1 };
+          resolved = current;
+        }
+      }
+
+      if (resolved !== current) changed = true;
+      data.push({ name, total: resolved });
+    }
+
+    if (!changed) return;
+
+    data.forEach(t => { bestScores[t.name] = t.total; });
     render(data);
-    const t = new Date();
     document.getElementById('lastUpdated').textContent =
-      'updated ' + t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      'updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   } catch (err) {
     console.warn('Fetch error, keeping current data:', err);
     document.getElementById('lastUpdated').textContent = 'fetch error — retrying';
+  } finally {
+    fetching = false;
   }
 }
 
