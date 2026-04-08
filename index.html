@@ -671,42 +671,38 @@ function launch() {
 }
 
 // ── Fetch ──────────────────────────────────────
-let lastGoodData = null;
+let lastCsvText = '';
+let pendingCsvText = '';
 
 async function fetchAndRender() {
   try {
     const separator = csvUrl.includes('?') ? '&' : '?';
     const url = csvUrl + separator + '_t=' + Date.now();
     const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
 
-    // Guard: if Google returned HTML instead of CSV, skip this cycle
-    if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) {
-      console.warn('Got HTML instead of CSV, skipping');
-      return;
+    if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return;
+
+    // Only update the board if we've seen this same response twice in a row
+    // This filters out cache flickering
+    if (text === lastCsvText) return; // already displaying this
+    if (text === pendingCsvText) {
+      // Got the same new data twice — it's real, apply it
+      lastCsvText = text;
+      const data = parseCSV(text);
+      if (data.length === 0) return;
+      render(data);
+      const t = new Date();
+      document.getElementById('lastUpdated').textContent =
+        'updated ' + t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } else {
+      // First time seeing this version — hold it as pending
+      pendingCsvText = text;
     }
-
-    const data = parseCSV(text);
-
-    // Guard: if we got no teams, skip — don't wipe the board
-    if (data.length === 0) {
-      console.warn('Parsed 0 teams, skipping');
-      return;
-    }
-
-    lastGoodData = data;
-    render(data);
-
-    const t = new Date();
-    document.getElementById('lastUpdated').textContent =
-      'updated ' + t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   } catch (err) {
-    console.warn('Fetch error, keeping last good data:', err);
+    console.warn('Fetch error, keeping current data:', err);
     document.getElementById('lastUpdated').textContent = 'fetch error — retrying';
-    // Don't re-render — the board keeps showing the last good state
   }
 }
 
