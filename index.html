@@ -599,7 +599,6 @@
 // ── State ──────────────────────────────────────
 let csvUrl = '';
 let prevScores = {};
-let bestScores = {}; // highest score seen per team — prevents CDN cache flicker from rolling back scores
 let demoData = [];
 
 // ── Setup ──────────────────────────────────────
@@ -672,7 +671,8 @@ function launch() {
 }
 
 // ── Fetch ──────────────────────────────────────
-let lastCsvText = '';
+let lastAppliedText = '';
+let pendingText = '';
 
 async function fetchAndRender() {
   try {
@@ -683,20 +683,25 @@ async function fetchAndRender() {
     const text = await res.text();
 
     if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return;
-    if (text === lastCsvText) return; // no change
 
-    const raw = parseCSV(text);
-    if (raw.length === 0) return;
+    // When CDN alternates between old and new, the old version matches lastAppliedText
+    // and gets skipped here — leaving pendingText intact for the new version to confirm.
+    if (text === lastAppliedText) return;
 
-    // Only let scores go up — if CDN serves a stale response, ignore any decreases
-    const data = raw.map(t => ({ name: t.name, total: Math.max(t.total, bestScores[t.name] ?? 0) }));
-    data.forEach(t => { bestScores[t.name] = t.total; });
-
-    lastCsvText = text;
-    render(data);
-    const t = new Date();
-    document.getElementById('lastUpdated').textContent =
-      'updated ' + t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    if (text === pendingText) {
+      // Seen this new version twice — it's stable, apply it
+      lastAppliedText = text;
+      pendingText = '';
+      const data = parseCSV(text);
+      if (data.length === 0) return;
+      render(data);
+      const t = new Date();
+      document.getElementById('lastUpdated').textContent =
+        'updated ' + t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } else {
+      // First time seeing this version — wait for one more confirmation
+      pendingText = text;
+    }
   } catch (err) {
     console.warn('Fetch error, keeping current data:', err);
     document.getElementById('lastUpdated').textContent = 'fetch error — retrying';
