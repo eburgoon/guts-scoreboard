@@ -638,11 +638,11 @@ function buildCsvUrl(url) {
       return `https://docs.google.com/spreadsheets/d/e/${pubMatch[1]}/pub?output=csv`;
     }
 
-    // Standard /d/ link — use export endpoint (sheet must be shared as "anyone with link can view")
+    // Standard /d/ link — use gviz/tq endpoint (shorter cache TTL than pub or export)
     const stdMatch = parsed.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
     if (stdMatch?.[1]) {
       const gid = parsed.searchParams.get('gid') || parsed.hash.match(/gid=(\d+)/)?.[1] || '0';
-      return `https://docs.google.com/spreadsheets/d/${stdMatch[1]}/export?format=csv&gid=${gid}`;
+      return `https://docs.google.com/spreadsheets/d/${stdMatch[1]}/gviz/tq?tqx=out:csv&gid=${gid}`;
     }
 
     return null;
@@ -671,8 +671,7 @@ function launch() {
 }
 
 // ── Fetch ──────────────────────────────────────
-let lastAppliedText = '';
-let pendingText = '';
+let lastAppliedJson = '';
 
 async function fetchAndRender() {
   try {
@@ -684,24 +683,17 @@ async function fetchAndRender() {
 
     if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return;
 
-    // When CDN alternates between old and new, the old version matches lastAppliedText
-    // and gets skipped here — leaving pendingText intact for the new version to confirm.
-    if (text === lastAppliedText) return;
+    const data = parseCSV(text);
+    if (data.length === 0) return;
 
-    if (text === pendingText) {
-      // Seen this new version twice — it's stable, apply it
-      lastAppliedText = text;
-      pendingText = '';
-      const data = parseCSV(text);
-      if (data.length === 0) return;
-      render(data);
-      const t = new Date();
-      document.getElementById('lastUpdated').textContent =
-        'updated ' + t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } else {
-      // First time seeing this version — wait for one more confirmation
-      pendingText = text;
-    }
+    // Compare parsed data, not raw text — avoids false mismatches from whitespace/encoding
+    const json = JSON.stringify(data);
+    if (json === lastAppliedJson) return;
+
+    lastAppliedJson = json;
+    render(data);
+    document.getElementById('lastUpdated').textContent =
+      'updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   } catch (err) {
     console.warn('Fetch error, keeping current data:', err);
     document.getElementById('lastUpdated').textContent = 'fetch error — retrying';
