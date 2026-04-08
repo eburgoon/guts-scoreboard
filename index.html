@@ -599,6 +599,7 @@
 // ── State ──────────────────────────────────────
 let csvUrl = '';
 let prevScores = {};
+let bestScores = {}; // highest score seen per team — prevents CDN cache flicker from rolling back scores
 let demoData = [];
 
 // ── Setup ──────────────────────────────────────
@@ -684,8 +685,12 @@ async function fetchAndRender() {
     if (text.trimStart().startsWith('<!') || text.trimStart().startsWith('<html')) return;
     if (text === lastCsvText) return; // no change
 
-    const data = parseCSV(text);
-    if (data.length === 0) return;
+    const raw = parseCSV(text);
+    if (raw.length === 0) return;
+
+    // Only let scores go up — if CDN serves a stale response, ignore any decreases
+    const data = raw.map(t => ({ name: t.name, total: Math.max(t.total, bestScores[t.name] ?? 0) }));
+    data.forEach(t => { bestScores[t.name] = t.total; });
 
     lastCsvText = text;
     render(data);
