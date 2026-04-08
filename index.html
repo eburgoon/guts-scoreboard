@@ -604,8 +604,8 @@ let demoData = [];
 // ── Setup ──────────────────────────────────────
 function connect() {
   const url = document.getElementById('csvUrl').value.trim();
-  if (!url || !url.includes('docs.google.com/spreadsheets/d/')) {
-    document.getElementById('errorMsg').textContent = '→ Please paste a valid Google Sheets CSV URL (published to web).';
+  if (!url) {
+    document.getElementById('errorMsg').textContent = '→ Please paste a URL.';
     return;
   }
 
@@ -627,18 +627,22 @@ function buildCsvUrl(url) {
     const parsed = new URL(url);
     if (!parsed.hostname.endsWith('google.com')) return null;
 
+    // Already a working published CSV link — use as-is
     const output = parsed.searchParams.get('output');
     const format = parsed.searchParams.get('format');
     if (output === 'csv' || format === 'csv') return parsed.toString();
 
-    const standardMatch = parsed.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    if (standardMatch?.[1]) {
-      return `https://docs.google.com/spreadsheets/d/${standardMatch[1]}/export?format=csv`;
+    // Published /d/e/ link (just missing ?output=csv)
+    const pubMatch = parsed.pathname.match(/\/spreadsheets\/d\/e\/([a-zA-Z0-9-_]+)/);
+    if (pubMatch?.[1]) {
+      return `https://docs.google.com/spreadsheets/d/e/${pubMatch[1]}/pub?output=csv`;
     }
 
-    const embeddedMatch = parsed.pathname.match(/\/spreadsheets\/d\/e\/([a-zA-Z0-9-_]+)/);
-    if (embeddedMatch?.[1]) {
-      return `https://docs.google.com/spreadsheets/d/e/${embeddedMatch[1]}/export?format=csv`;
+    // Standard /d/ link — convert to pub CSV
+    // This ONLY works if the sheet has been "Publish to web"
+    const stdMatch = parsed.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    if (stdMatch?.[1]) {
+      return `https://docs.google.com/spreadsheets/d/e/${stdMatch[1]}/pub?output=csv`;
     }
 
     return null;
